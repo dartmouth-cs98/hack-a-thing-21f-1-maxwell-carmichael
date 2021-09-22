@@ -1,22 +1,49 @@
+/**
+ * This small program ran from pizza.sh, or can be run using "node pizza.sh" after running "npm install"
+ * You need to have a mysql server running on localhost. I recommend using MySQL Workbench.
+ * You also need to specify the port, user, and password in mysqlconfig.json
+ * 
+ * This creates three tables: items, customers, and purchases then creates an ordered aggregated table
+ *   with information from all three tables.
+ * 
+ */
+
+
 const mysql = require("mysql");
 const mysqlconfig = require("./mysqlconfig.json");
 
+/**
+ * Create mysql.Connection "con"
+ */ 
 const con = mysql.createConnection({
   ...mysqlconfig,
   multipleStatements: true
 });
 
-// first try to connect
-con.connect((err) => {
-  if (err) throw err;
-  console.log("Connected!");
+/**
+ * Connect to localhost promise
+ */
+const connectPromise = new Promise((resolve, reject) => {
+  con.connect((err) => {
+    if (err) reject(err);
+    resolve();
+  });
+});
 
-  // then create the base database
+/**
+ * Promise which creates three tables:
+ *   items          (item_id,     name,        price)
+ *   customers      (customer_id, first_name,  last_name, age)
+ *   purchases      (purchase_id, customer_id, item_id,   date)
+ * 
+ * And some data inserted into each table
+ */
+const createDatabasePromise = new Promise((resolve, reject) => {
   con.query(
     `
-    DROP DATABASE IF EXISTS mydb;
-    CREATE DATABASE mydb;
-    USE mydb;
+    DROP DATABASE IF EXISTS pizzaparlor;
+    CREATE DATABASE pizzaparlor;
+    USE pizzaparlor;
 
     CREATE TABLE items (
       item_id tinyint(4) NOT NULL AUTO_INCREMENT,
@@ -65,12 +92,24 @@ con.connect((err) => {
         (1, 2, "2021-05-05");
         `,
     (err) => {
-    if (err) throw err;
-    console.log("Database created");
+      if (err) throw reject(err);
+      resolve();
+    });
+});
 
-    con.query(`
+/**
+ * Aggregate the three tables using JOINS and UNIONS:
+ * 
+ * Takes the purchases table, but instead of customer_id has the customer's first name,
+ *   and instead of item_id has the name of the item. Also adds a new column "recency" which
+ *   is "new" if the purchase was made after May 1, 2021, and "old" otherwise.
+ * 
+ */
+const createAggregateTablePromise = new Promise((resolve, reject) => {
+  con.query(`
       CREATE TABLE aggregate AS (
       SELECT
+        p.purchase_id,
         c.first_name,
         i.name AS item,
         i.price,
@@ -84,6 +123,7 @@ con.connect((err) => {
       WHERE date >= "2021-05-01"
       UNION
       SELECT
+        p.purchase_id,
         c.first_name,
         i.name AS item,
         i.price,
@@ -95,11 +135,43 @@ con.connect((err) => {
       JOIN items i
         USING (item_id)
       WHERE date < "2021-05-01"
-      ORDER BY first_name, date
+      ORDER BY first_name, date DESC
       );
     `, (err, result) => {
-      if (err) throw err;
-      console.log("Result:\n", result);
-    });
+    if (err) reject(err);
+    resolve(result);
   });
 });
+
+/**
+ * Connects, creates the database with three tables, then creates a fourth aggregated table by
+ * resolving all the promises written above. Then it closes the connection.
+ * 
+ * @returns {Promise}
+ */
+const main = async () => {
+  try {
+    await connectPromise;
+    console.log("Connected!");
+
+    await createDatabasePromise;
+    console.log("Database created!");
+
+    await createAggregateTablePromise;
+    console.log("Aggregate table created!")
+  }
+  catch(error) {
+    console.log("Error in main:", error);
+  }
+
+  await new Promise ((resolve, reject) => {
+    con.end(err => {
+      if (err) reject(err);
+      resolve();
+    });
+  });
+  
+  return;
+};
+
+main();
